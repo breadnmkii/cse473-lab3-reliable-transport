@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h> // bugfix
+#include <string.h>
 
 /* ******************************************************************
  ALTERNATING BIT AND GO-BACK-N NETWORK EMULATOR: VERSION 1.1  J.F.Kurose
@@ -32,9 +34,18 @@ struct pkt {
    int acknum;
    int checksum;
    char payload[20];
-    };
+  };
 
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
+
+
+/* TODO */
+//
+// - How do timers work in this?:
+//  + Sender A sends, stop-and-wait?
+//
+
+
 
 // DECLARE STATIC VARIABLES HERE??
 static int A_seqnum = 0;
@@ -45,46 +56,71 @@ static int B_acknum = 0;
 A_output(message)
   struct msg message; // Q: wtf is this signature A: old-style parameter lists (https://stackoverflow.com/questions/1585390/c-function-syntax-parameter-types-declared-after-parameter-list)
 {
-  // TODO: format network packet (following pkt struct)
-  // then use tolayer3() to send
   int i;
   int A_checksum = 0; // init with 0s
+  struct pkt A_sendPacket;
 
   // Calculate checksum (protects data, seq, ack fields)
-  A_checksum = message.seqnum + message.acknum;
+  A_checksum = A_seqnum + 0;  // No ack field from A
   for (i=0; i<20; ++i) {
     A_checksum += (int)message.data[i];
   }
+  A_checksum = ~A_checksum;
+
+  printf("Called A_output\n");
+  printf("Checksum: %d\n", A_checksum);
 
   // Q: how are seqnum and acknum kept track of? I cant reference stuff from emulator?? can i declare static variables??
-  struct pkt A_sendPacket = {
-    A_seqnum,
-    NULL,     // A side doesn't have to send ACK messages
-    A_checksum,
-    message.data
-  };
+  A_sendPacket.seqnum = A_seqnum;
+  A_sendPacket.acknum = 0; // A side doesn't have to send ACK messages
+  A_sendPacket.checksum = A_checksum;
+  strncpy(A_sendPacket.payload, message.data, 20);
 
   // Send A_packet to network layer
-  tolayer3(A, A_sendPacket)
+  tolayer3(0, A_sendPacket);
+  ++A_seqnum;
+
+  // Start timer & increment seqnum if acked in time
+  starttimer(0, (float)1000); // Q: how to set time programatically?
 }
 
 B_output(message)  /* need be completed only for extra credit */
   struct msg message;
 {
-  
 }
 
 /* called from layer 3, when a packet arrives for layer 4 */
 A_input(packet)
   struct pkt packet;
 {
+  int i;
+  int A_checksum = 0;
+
+  // Stop timer on receive
+  stoptimer(0);
+
+  // Calculate checksum
+  A_checksum = packet.seqnum + packet.acknum;
+  for (i=0; i<20; ++i) {
+    A_checksum += (int)packet.payload[i];
+  }
+  if (A_checksum) {
+    printf("Data corruption detected!\n");
+  }
+
+  printf("Called A_input\n");
+  printf("Checksum: %d\n", A_checksum);
+
+  // Send data to application layer
+  tolayer5(0, packet.payload);
 
 }
 
 /* called when A's timer goes off */
 A_timerinterrupt()
 {
-
+  printf("Packet was not received by B!\n");
+  --A_seqnum; // decrement to last packet to retransmit
 }  
 
 /* the following routine will be called once (only) before any other */
@@ -100,6 +136,26 @@ A_init()
 B_input(packet)
   struct pkt packet;
 {
+  int i;
+  int B_checksum = 0;  
+
+  // Calculate checksum
+  B_checksum = packet.seqnum + packet.acknum + packet.checksum;
+  for (i=0; i<20; ++i) {
+    B_checksum += (int)packet.payload[i];
+  }
+  B_checksum = ~B_checksum;
+
+  if (B_checksum) {
+    printf("Data corruption detected!\n");
+  }
+
+  printf("Called B_input\n");
+  printf("Checksum: %d\n", B_checksum);
+
+  // Send data to application layer
+  tolayer5(1, packet.payload);
+
 }
 
 /* called when B's timer goes off */
@@ -273,7 +329,7 @@ init()                         /* initialize the simulator */
     printf("It is likely that random number generation on your machine\n" ); 
     printf("is different from what this emulator expects.  Please take\n");
     printf("a look at the routine jimsrand() in the emulator code. Sorry. \n");
-    exit();
+    exit(0);  // bugfix
     }
 
    ntolayer3 = 0;
@@ -305,7 +361,7 @@ generate_next_arrival()
 {
    double x,log(),ceil();
    struct event *evptr;
-    char *malloc();
+  // char *malloc();
    float ttime;
    int tempint;
 
@@ -416,7 +472,7 @@ float increment;
 
  struct event *q;
  struct event *evptr;
- char *malloc();
+ // char *malloc();
 
  if (TRACE>2)
     printf("          START TIMER: starting timer at %f\n",time);
@@ -444,7 +500,7 @@ struct pkt packet;
 {
  struct pkt *mypktptr;
  struct event *evptr,*q;
- char *malloc();
+ // char *malloc();
  float lastime, x, jimsrand();
  int i;
 
