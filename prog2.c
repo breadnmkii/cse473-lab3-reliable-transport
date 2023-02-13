@@ -107,7 +107,7 @@ A_input(packet)
   stoptimer(0);
 
   // Calculate checksum
-  B_checksum = packet.seqnum + packet.acknum;
+  B_checksum = packet.seqnum + packet.acknum + packet.checksum;
   for (i=0; i<20; ++i) {
     B_checksum += (int)packet.payload[i];
   }
@@ -120,24 +120,23 @@ A_input(packet)
   printf("B_acknum: %d\n", packet.acknum);
 
   if (!B_checksum) {
+    printf("Data corruption detected! Retransmitting...\n");
     // Retransmit same packet
     tolayer3(0, A_sendPacket);
 
     // Start timer
     starttimer(0, (float)1000); // Q: how to set time programatically?
-
-    printf("Data corruption detected! Retransmitting...\n");
   }
   else if (packet.acknum != A_seqnum) {
+    printf("Receiver NACK! Retransmitting...\n");
     // Retransmit same packet
     tolayer3(0, A_sendPacket);
 
     // Start timer
     starttimer(0, (float)1000); // Q: how to set time programatically?
-
-    printf("Receiver NACK! Retransmitting...\n");
   }
   else {
+    printf("Receiver ACK!\n");
     // Successful, alternate seqnum and indicate received
     A_seqnum = (A_seqnum+1)%2;
     A_didrecv = 1;
@@ -145,7 +144,6 @@ A_input(packet)
     // Send data to application layer
     tolayer5(0, packet.payload);
 
-    printf("Receiver ACK!\n");
   }
 
 }
@@ -153,13 +151,13 @@ A_input(packet)
 /* called when A's timer goes off */
 A_timerinterrupt()
 { 
+  printf("Receiver timeout! Retransmitting...\n");
   // Retransmit same packet
   tolayer3(0, A_sendPacket);
 
   // Start timer
   starttimer(0, (float)1000); // Q: how to set time programatically?
 
-  printf("Receiver timeout! Retransmitting...\n");
 }  
 
 /* the following routine will be called once (only) before any other */
@@ -189,7 +187,8 @@ B_input(packet)
 
   // DEBUG
   printf("Called B_input\n");
-  printf("A_checksum: %d\n", A_checksum);
+  printf("A_checksum: %d\n", packet.checksum);
+  printf("A_checksum calc: %d\n", A_checksum);
   printf("A_seqnum: %d\n", packet.seqnum);
 
   if (A_checksum) {
@@ -197,7 +196,7 @@ B_input(packet)
     B_sendACK.acknum = (packet.seqnum+1)%2; // Alternate seqnum implies NACK
 
     printf("Data corruption detected!\n");
-    printf("B NACKing\n");
+    printf("B sending NACK...\n");
   }
   else {
     // send ACK
@@ -206,7 +205,7 @@ B_input(packet)
     // Send data to application layer
     tolayer5(1, packet.payload);
 
-    printf("B ACKing\n");
+    printf("B sending ACK...\n");
   }
 
   // Calculate B_checksum (protects ack field)
