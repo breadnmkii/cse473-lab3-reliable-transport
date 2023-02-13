@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <stdlib.h> // bugfix
+#include <stdlib.h>
 #include <string.h>
 
 /* ******************************************************************
@@ -41,15 +41,14 @@ struct pkt {
 
 /* TODO */
 //
-// - How do timers work in this?:
-//  + Sender A sends, stop-and-wait?
+// - FIX sender corruption not being detected by sender
 //
 
 
-
 // DECLARE STATIC VARIABLES HERE??
-static int A_seqnum = 0;
-static int B_acknum = 0;
+static int A_seqnum = 0;  // Either 0 or 1
+static int A_didrecv = 1;
+static struct pkt A_sendPacket;
 
 
 /* called from layer 5, passed the data to be sent to other side */
@@ -58,30 +57,37 @@ A_output(message)
 {
   int i;
   int A_checksum = 0; // init with 0s
-  struct pkt A_sendPacket;
 
-  // Calculate checksum (protects data, seq, ack fields)
-  A_checksum = A_seqnum + 0;  // No ack field from A
-  for (i=0; i<20; ++i) {
-    A_checksum += (int)message.data[i];
-  }
-  A_checksum = ~A_checksum;
-
+  // DEBUG
   printf("Called A_output\n");
-  printf("Checksum: %d\n", A_checksum);
 
-  // Q: how are seqnum and acknum kept track of? I cant reference stuff from emulator?? can i declare static variables??
-  A_sendPacket.seqnum = A_seqnum;
-  A_sendPacket.acknum = 0; // A side doesn't have to send ACK messages
-  A_sendPacket.checksum = A_checksum;
-  strncpy(A_sendPacket.payload, message.data, 20);
+  // If sender ready to send
+  if (A_didrecv) {
+    // Calculate A checksum (protects data, seq, ack fields)
+    A_checksum = A_seqnum + 0;  // No ack field from A
+    for (i=0; i<20; ++i) {
+      A_checksum += (int)message.data[i];
+    }
+    A_checksum = ~A_checksum;
 
-  // Send A_packet to network layer
-  tolayer3(0, A_sendPacket);
-  ++A_seqnum;
+    // DEBUG
+    printf("A_checksum: %d\n", A_checksum);
 
-  // Start timer & increment seqnum if acked in time
-  starttimer(0, (float)1000); // Q: how to set time programatically?
+    A_sendPacket.seqnum = A_seqnum;
+    A_sendPacket.checksum = A_checksum;
+    strncpy(A_sendPacket.payload, message.data, 20);
+
+    // Send A_packet to network layer
+    A_didrecv = 0;
+    tolayer3(0, A_sendPacket);
+
+    // Start timer
+    starttimer(0, (float)1000); // Q: how to set time programatically?
+  }
+  else {
+    printf("WARN: Dropping incoming application packet!\n");
+  }
+
 }
 
 B_output(message)  /* need be completed only for extra credit */
@@ -95,32 +101,65 @@ A_input(packet)
 {
   int i;
   int A_checksum = 0;
+  int B_checksum;
 
   // Stop timer on receive
   stoptimer(0);
 
   // Calculate checksum
-  A_checksum = packet.seqnum + packet.acknum;
+  B_checksum = packet.seqnum + packet.acknum;
   for (i=0; i<20; ++i) {
-    A_checksum += (int)packet.payload[i];
+    B_checksum += (int)packet.payload[i];
   }
-  if (A_checksum) {
-    printf("Data corruption detected!\n");
-  }
+  B_checksum = ~B_checksum;
 
+  // DEBUG
   printf("Called A_input\n");
-  printf("Checksum: %d\n", A_checksum);
+  printf("B_checksum: %d\n", packet.checksum);
+  printf("B_checksum calc: %d\n", B_checksum);
+  printf("B_acknum: %d\n", packet.acknum);
 
-  // Send data to application layer
-  tolayer5(0, packet.payload);
+  if (!B_checksum) {
+    // Retransmit same packet
+    tolayer3(0, A_sendPacket);
+
+    // Start timer
+    starttimer(0, (float)1000); // Q: how to set time programatically?
+
+    printf("Data corruption detected! Retransmitting...\n");
+  }
+  else if (packet.acknum != A_seqnum) {
+    // Retransmit same packet
+    tolayer3(0, A_sendPacket);
+
+    // Start timer
+    starttimer(0, (float)1000); // Q: how to set time programatically?
+
+    printf("Receiver NACK! Retransmitting...\n");
+  }
+  else {
+    // Successful, alternate seqnum and indicate received
+    A_seqnum = (A_seqnum+1)%2;
+    A_didrecv = 1;
+
+    // Send data to application layer
+    tolayer5(0, packet.payload);
+
+    printf("Receiver ACK!\n");
+  }
 
 }
 
 /* called when A's timer goes off */
 A_timerinterrupt()
-{
-  printf("Packet was not received by B!\n");
-  --A_seqnum; // decrement to last packet to retransmit
+{ 
+  // Retransmit same packet
+  tolayer3(0, A_sendPacket);
+
+  // Start timer
+  starttimer(0, (float)1000); // Q: how to set time programatically?
+
+  printf("Receiver timeout! Retransmitting...\n");
 }  
 
 /* the following routine will be called once (only) before any other */
@@ -137,24 +176,51 @@ B_input(packet)
   struct pkt packet;
 {
   int i;
-  int B_checksum = 0;  
+  int A_checksum;
+  int B_checksum = 0;
+  static struct pkt B_sendACK;
 
-  // Calculate checksum
-  B_checksum = packet.seqnum + packet.acknum + packet.checksum;
+  // Calculate A_checksum
+  A_checksum = packet.seqnum + packet.acknum + packet.checksum;
   for (i=0; i<20; ++i) {
-    B_checksum += (int)packet.payload[i];
+    A_checksum += (int)packet.payload[i];
   }
-  B_checksum = ~B_checksum;
+  A_checksum = ~A_checksum;
 
-  if (B_checksum) {
-    printf("Data corruption detected!\n");
-  }
-
+  // DEBUG
   printf("Called B_input\n");
-  printf("Checksum: %d\n", B_checksum);
+  printf("A_checksum: %d\n", A_checksum);
+  printf("A_seqnum: %d\n", packet.seqnum);
 
-  // Send data to application layer
-  tolayer5(1, packet.payload);
+  if (A_checksum) {
+    // send NACK
+    B_sendACK.acknum = (packet.seqnum+1)%2; // Alternate seqnum implies NACK
+
+    printf("Data corruption detected!\n");
+    printf("B NACKing\n");
+  }
+  else {
+    // send ACK
+    B_sendACK.acknum = packet.seqnum; // Same seqnum implies ACK
+
+    // Send data to application layer
+    tolayer5(1, packet.payload);
+
+    printf("B ACKing\n");
+  }
+
+  // Calculate B_checksum (protects ack field)
+  B_checksum = 0 + B_sendACK.acknum;  // No seq field from B
+  B_checksum = ~B_checksum;
+  B_sendACK.checksum = B_checksum;
+  for (i=0; i<20; ++i) {
+    B_sendACK.payload[i] = 1;
+  }
+  
+  // DEBUG
+  printf("B_checksum: %d\n", B_checksum);
+  printf("B_acknum: %d\n", B_sendACK.acknum);
+  tolayer3(1, B_sendACK);
 
 }
 
